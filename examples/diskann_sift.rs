@@ -203,7 +203,7 @@ fn main() -> Result<(), DiskAnnError> {
 
     // Evaluate at k=10, beam 256
     let k = 10.min(knbn_max);
-    run_search(&index, &anndata, k, 256);
+    run_search(&index, &anndata, k, 512);
 
     Ok(())
 }
