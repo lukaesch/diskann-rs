@@ -512,7 +512,7 @@ fn build_vamana_graph<D: Distance<f32> + Copy + Sync>(
 
     // Refinement passes
     const PASSES: usize = 1;
-    const EXTRA_SEEDS: usize = 3;
+    const EXTRA_SEEDS: usize = 2;
 
     let mut rng = thread_rng();
     for _pass in 0..PASSES {
