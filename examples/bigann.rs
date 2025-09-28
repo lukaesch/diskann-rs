@@ -219,31 +219,29 @@ fn eval_recall(
     k: usize,
     beam: usize,
 ) {
-
-    assert_eq!(queries_f32.len(), gt.len());
-
     let t0 = Instant::now();
 
-    // Parallel over queries
-    let correct: usize = (0..queries_f32.len())
-        .into_par_iter()
-        .map(|qi| {
-            let q = &queries_f32[qi];
+    // Parallel map-reduce over queries
+    let correct: usize = queries_f32
+        .par_iter()
+        .enumerate()
+        .map(|(qi, q)| {
             let nns = index.search(q, k, beam);
-
-            // Ground truth stores squared L2
             let kth = gt[qi][k - 1].1.sqrt();
 
             // Count how many returned are within GT@k radius
-            let mut c = 0usize;
+            let mut local_correct = 0usize;
             for &id in &nns {
+                // If you later add a zero-copy accessor, prefer:
+                // let v = index.get_vector_slice(id as usize);
+                // let d = euclid(q, v);
                 let v = index.get_vector(id as usize);
                 let d = euclid(q, &v);
                 if d <= kth {
-                    c += 1;
+                    local_correct += 1;
                 }
             }
-            c
+            local_correct
         })
         .sum();
 
@@ -257,7 +255,45 @@ fn eval_recall(
     );
 }
 
+// Single-threaded
+fn eval_recall_single(
+    index: &DiskANN<DistL2>,
+    queries_f32: &[Vec<f32>],
+    gt: &[Vec<(u32, f32)>], // (id, sqdist)
+    k: usize,
+    beam: usize,
+) {
+    assert_eq!(queries_f32.len(), gt.len());
+    let t0 = Instant::now();
+
+    let mut correct = 0usize;
+    for (qi, q) in queries_f32.iter().enumerate() {
+        let nns = index.search(q, k, beam);
+        let kth = gt[qi][k - 1].1.sqrt();
+
+        for &id in &nns {
+            let v = index.get_vector(id as usize);
+            let d = euclid(q, &v);
+            if d <= kth {
+                correct += 1;
+            }
+        }
+    }
+
+    let secs = t0.elapsed().as_secs_f32();
+    let recall = (correct as f32) / ((k * queries_f32.len()) as f32);
+    let qps = (queries_f32.len() as f32) / secs;
+
+    println!(
+        "k={k:>3}  recall={:.4}  qps={:.1}  time={:.1}s  (beam={})",
+        recall, qps, secs, beam
+    );
+}
+
 fn main() {
+    // Toggle this to choose evaluation mode
+    const PARALLEL: bool = false;
+
     // Filenames in repo root
     // download all data here: http://corpus-texmex.irisa.fr (ANN_SIFT1B)
     let base_path = "bigann_base.bvecs";
@@ -274,13 +310,18 @@ fn main() {
         read_query_bvecs::<DIM>(query_path, NB_QUERY).expect("failed reading queries");
     let queries_f32: Vec<Vec<f32>> = queries_u8.iter().map(|v| u8s_to_f32(v)).collect();
 
-    // Read ground truth (100M set)
+    // Read ground truth (10M set)
     println!("Reading ground truth from {}, {}…", gt_i_path, gt_f_path);
     let gt = read_ground_truth(gt_i_path, gt_f_path, NB_QUERY).expect("failed reading ground truth");
     let kn = gt[0].len();
     println!("GT loaded: {} queries, GT@{} per query", gt.len(), kn);
 
-    // Two standard BigANN measures
-    eval_recall(&index, &queries_f32, &gt, 10, BEAM_SEARCH);
-    eval_recall(&index, &queries_f32, &gt, 100, BEAM_SEARCH);
+    // Evaluate
+    if PARALLEL {
+        eval_recall(&index, &queries_f32, &gt, 10, BEAM_SEARCH);
+        eval_recall(&index, &queries_f32, &gt, 100, BEAM_SEARCH);
+    } else {
+        eval_recall_single(&index, &queries_f32, &gt, 10, BEAM_SEARCH);
+        eval_recall_single(&index, &queries_f32, &gt, 100, BEAM_SEARCH);
+    }
 }
