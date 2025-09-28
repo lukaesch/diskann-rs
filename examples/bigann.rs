@@ -38,7 +38,7 @@ const DISKANN_PARAMS: DiskAnnParams = DiskAnnParams {
     build_beam_width: 200,
     alpha: 1.2,
 };
-const BEAM_SEARCH: usize = 1024;
+const BEAM_SEARCH: usize = 512;
 
 fn read_bvecs_block<const SIZE: usize>(
     r: &mut BufReader<File>,
