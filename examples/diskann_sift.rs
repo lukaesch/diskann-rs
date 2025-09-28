@@ -123,7 +123,7 @@ fn main() -> Result<(), DiskAnnError> {
 
     // Build/open parameters
     let max_degree = 64;
-    let build_beam_width = 256;
+    let build_beam_width = 128;
     let alpha = 1.2;
 
     let index_path = "diskann_sift1m.db";

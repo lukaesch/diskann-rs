@@ -37,7 +37,7 @@ fn main() -> Result<(), DiskAnnError> {
 
     // DiskANN build parameters (tune as desired)
     let max_degree = 48;           
-    let build_beam_width = 256;     // smaller beam for faster build (64–128)
+    let build_beam_width = 128;     // smaller beam for faster build (64–128)
     let alpha = 1.2;               // standard α
     let search_k = 10;             // evaluate @k=10 (matches HNSW example)
     let search_beam = 384;          // search beam: speed/recall tradeoff
