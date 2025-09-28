@@ -223,11 +223,9 @@ fn eval_recall(
     // GT is squared L2; threshold is sqrt of kth distance
     let t0 = Instant::now();
     let mut correct = 0usize;
-    let mut returned = 0usize;
 
     for (qi, q) in queries_f32.iter().enumerate() {
         let nns = index.search(q, k, beam);
-        returned += nns.len();
 
         let kth_sq = gt[qi][k - 1].1;
         let kth = kth_sq.sqrt();
