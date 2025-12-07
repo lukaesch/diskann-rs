@@ -41,3 +41,11 @@ harness = false
 [[bench]]
 name = "comparison"
 harness = false
+
+[[example]]
+name = "diskann_sift"
+required-features = ["hdf5"]
+
+[[example]]
+name = "diskann_mnist"
+required-features = ["hdf5"]

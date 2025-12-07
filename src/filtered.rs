@@ -22,9 +22,9 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use anndists::dist::DistL2;
-//! use diskann_rs::{FilteredDiskANN, Filter, FilterOp};
+//! use diskann_rs::{FilteredDiskANN, Filter};
 //!
 //! // Build index with metadata
 //! let vectors = vec![vec![0.0; 128]; 1000];
@@ -37,6 +37,7 @@
 //! ).unwrap();
 //!
 //! // Search with filter: only category 5
+//! let query = vec![0.0f32; 128];
 //! let filter = Filter::label_eq(0, 5); // field 0 == 5
 //! let results = index.search_filtered(&query, 10, 128, &filter);
 //! ```

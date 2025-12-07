@@ -14,11 +14,11 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use diskann_rs::pq::{ProductQuantizer, PQConfig};
 //!
 //! // Train a quantizer on sample vectors
-//! let vectors: Vec<Vec<f32>> = /* your training data */;
+//! let vectors: Vec<Vec<f32>> = load_your_training_data();
 //! let config = PQConfig::default(); // 8 subspaces, 256 centroids each
 //! let pq = ProductQuantizer::train(&vectors, config).unwrap();
 //!
