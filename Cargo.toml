@@ -1,6 +1,6 @@
 [package]
 name = "diskann-rs"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "A Rust implementation of DiskANN (Disk-based Approximate Nearest Neighbor search) using the Vamana graph algorithm. Provides memory-efficient vector search through graph traversal and memory-mapped storage, enabling billion-scale search with minimal RAM usage."
 license = "MIT" 
