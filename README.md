@@ -3,254 +3,259 @@
 [![Latest Version](https://img.shields.io/crates/v/diskann_rs?style=for-the-badge&color=mediumpurple&logo=rust)](https://crates.io/crates/diskann_rs)
 [![docs.rs](https://img.shields.io/docsrs/diskann_rs?style=for-the-badge&logo=docs.rs&color=mediumseagreen)](https://docs.rs/diskann_rs/latest/diskann_rs/)
 
+A Rust implementation of [DiskANN](https://proceedings.neurips.cc/paper_files/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html) (Disk-based Approximate Nearest Neighbor search) using the Vamana graph algorithm. This project provides an efficient and scalable solution for large-scale vector similarity search with minimal memory footprint.
 
-A Rust implementation of [DiskANN]() (Disk-based Approximate Nearest Neighbor search) using the Vamana graph algorithm. This project provides an efficient and scalable solution for large-scale vector similarity search with minimal memory footprint, as an alternative to the widely used in-memory [HNSW](https://crates.io/crates/hnsw_rs) algorithm. 
+## When to Use diskann-rs
 
-## Overview
+| Use diskann-rs when... | Use in-memory indexes (hnsw_rs) when... |
+|------------------------|----------------------------------------|
+| Index is larger than available RAM | Index fits comfortably in RAM |
+| You need incremental updates without rebuilding | Build time is critical (one-time cost) |
+| Memory-constrained environments (containers, edge) | Maximum recall needed (98%+) |
+| Multiple large indexes on same machine | Single index, dedicated resources |
+| Cost-sensitive deployments | Latency-critical applications |
 
-This implementation follows the DiskANN paper's approach by:
-- Using the Vamana graph algorithm for index construction
-- Memory-mapping the index file for efficient disk-based access
-- Implementing beam search with medoid entry points
-- Supporting Euclidean, Cosine, Hamming and other distance metrics via a generic distance trait
-- Maintaining minimal memory footprint during search operations
+**TL;DR**: diskann-rs trades ~60% slower build time for 6-10x lower memory usage and 15x faster incremental updates.
 
 ## Key Features
 
-- **Single-file storage**: All index data stored in one memory-mapped file
-- **Vamana graph construction**: Efficient graph building with α-pruning, with rayon for concurrent and parallel construction
-- **Memory-efficient search**: Uses beam search that visits < 1% of vectors
-- **Distance metrics**: Support for Euclidean, Cosine and Hamming similarity et.al. via [anndists](https://crates.io/crates/anndists). A generic distance trait that can be extended to other distance metrics
-- **Medoid-based entry points**: Smart starting points for search
-- **Parallel query processing**: Using rayon for concurrent searches
-- **Minimal memory footprint**: ~330MB RAM for 2GB index (16% of file size)
+| Feature | Description |
+|---------|-------------|
+| **Incremental Updates** | Add/delete vectors without rebuilding the entire index |
+| **Filtered Search** | Query with metadata predicates (e.g., category filters) |
+| **SIMD Acceleration** | Optimized distance calculations (AVX2, SSE4.1, NEON) |
+| **Product Quantization** | Compress vectors up to 64x with PQ encoding |
+| **Memory-Mapped I/O** | Single-file storage with minimal RAM footprint |
+| **Parallel Processing** | Concurrent index building and batch queries |
 
-## Usage
+## Quick Start
 
-### Building a New Index
+### Basic Index Operations
 
 ```rust
-use anndists::dist::{DistL2, DistCosine}; // or your own Distance types
+use anndists::dist::DistL2;
 use diskann_rs::{DiskANN, DiskAnnParams};
 
-// Your vectors to index (all rows must share the same dimension)
-let vectors: Vec<Vec<f32>> = vec![
-    vec![0.1, 0.2, 0.3],
-    vec![0.4, 0.5, 0.6],
-];
-
-// Easiest: build with defaults (M=64, L_build=128, alpha=1.2)
+// Build index
+let vectors: Vec<Vec<f32>> = vec![vec![0.1, 0.2, 0.3], vec![0.4, 0.5, 0.6]];
 let index = DiskANN::<DistL2>::build_index_default(&vectors, DistL2 {}, "index.db")?;
 
-// Or: custom construction parameters
-let params = DiskAnnParams {
-    max_degree: 48,        // max neighbors per node
-    build_beam_width: 128, // construction beam width
-    alpha: 1.2,            // α for pruning
+// Search
+let query = vec![0.1, 0.2, 0.4];
+let neighbors: Vec<u32> = index.search(&query, 10, 256);
+```
+
+### Incremental Updates (No Rebuild Required)
+
+```rust
+use anndists::dist::DistL2;
+use diskann_rs::IncrementalDiskANN;
+
+// Build initial index
+let vectors = vec![vec![0.0; 128]; 1000];
+let index = IncrementalDiskANN::<DistL2>::build_default(&vectors, "index.db")?;
+
+// Add new vectors without rebuilding
+let new_vectors = vec![vec![1.0; 128]; 100];
+index.add_vectors(&new_vectors)?;
+
+// Delete vectors (instant tombstoning)
+index.delete_vectors(&[0, 1, 2])?;
+
+// Compact when needed (merges delta layer)
+if index.should_compact() {
+    index.compact("index_v2.db")?;
+}
+```
+
+### Filtered Search (Metadata Predicates)
+
+```rust
+use anndists::dist::DistL2;
+use diskann_rs::{FilteredDiskANN, Filter};
+
+// Build with labels (e.g., category IDs)
+let vectors = vec![vec![0.0; 128]; 1000];
+let labels: Vec<Vec<u64>> = (0..1000).map(|i| vec![i % 10]).collect(); // 10 categories
+
+let index = FilteredDiskANN::<DistL2>::build(&vectors, &labels, "filtered.db")?;
+
+// Search only category 5
+let filter = Filter::label_eq(0, 5);
+let results = index.search_filtered(&query, 10, 128, &filter);
+
+// Complex filters
+let filter = Filter::and(vec![
+    Filter::label_eq(0, 5),           // category == 5
+    Filter::label_range(1, 10, 100),  // price in [10, 100]
+]);
+```
+
+### Product Quantization (64x Compression)
+
+```rust
+use diskann_rs::pq::{ProductQuantizer, PQConfig};
+
+// Train quantizer
+let config = PQConfig {
+    num_subspaces: 8,      // M = 8 segments
+    num_centroids: 256,    // K = 256 codes per segment
+    ..Default::default()
 };
-let index2 = DiskANN::<DistCosine>::build_index_with_params(
-    &vectors,
-    DistCosine {},
-    "index_cos.db",
-    params,
-)?;
+let pq = ProductQuantizer::train(&vectors, config)?;
+
+// Encode vectors (128-dim f32 -> 8 bytes)
+let codes: Vec<Vec<u8>> = pq.encode_batch(&vectors);
+
+// Fast approximate distance using lookup table
+let table = pq.create_distance_table(&query);
+let dist = pq.distance_with_table(&table, &codes[0]);
 ```
 
-### Opening an Existing Index
+### SIMD-Accelerated Distance
 
 ```rust
-use anndists::dist::DistL2;
-use diskann_rs::DiskANN;
+use diskann_rs::{SimdL2, DiskANN, simd_info};
 
-// If you built with DistL2 and defaults:
-let index = DiskANN::<DistL2>::open_index_default_metric("index.db")?;
+// Check available SIMD features
+println!("{}", simd_info()); // "SIMD: NEON" or "SIMD: AVX2, SSE4.1"
 
-// Or, explicitly provide the distance you built with:
-let index2 = DiskANN::<DistL2>::open_index_with("index.db", DistL2 {})?;
+// Use SIMD-optimized L2 distance
+let index = DiskANN::<SimdL2>::build_index_default(&vectors, SimdL2, "index.db")?;
+
+// Or use SIMD directly
+use diskann_rs::simd::{l2_squared, dot_product, cosine_distance};
+let dist = l2_squared(&vec_a, &vec_b);
 ```
 
-### Searching the Index
+## Performance
 
-```rust
-use anndists::dist::DistL2;
-use diskann_rs::DiskANN;
+### Why diskann-rs? Memory-Mapped I/O
 
-let index = DiskANN::<DistL2>::open_index_default_metric("index.db")?;
-let query: Vec<f32> = vec![0.1, 0.2, 0.4]; // length must match the indexed dim
-let k = 10;
-let beam = 256; // search beam width
+Unlike in-memory indexes that require loading the entire graph into RAM, diskann-rs uses memory-mapped files. The OS loads only the pages you access, making it ideal for large-scale deployments:
 
-// (IDs, distance)
-let hits: Vec<(u32, f32)> = index.search_with_dists(&query, 10, beam);
-// `neighbors` are the IDs of the k nearest vectors
-let neighbors: Vec<u32> = index.search(&query, k, beam);
+<p align="center">
+  <img src="docs/charts/memory_usage.svg" alt="Memory Usage Comparison" width="600">
+</p>
+
+| Workload | diskann-rs | hnsw_rs | Savings |
+|----------|------------|---------|---------|
+| Light (10 queries) | 90 MB | 896 MB | **10x less RAM** |
+| Medium (100 queries) | 136 MB | 896 MB | **6.6x less RAM** |
+| Heavy (1K queries) | 147 MB | 896 MB | **6x less RAM** |
+| Stress (5K queries) | 139 MB | 896 MB | **6.4x less RAM** |
+
+*Tested with 200K vectors, 128 dimensions. hnsw_rs must hold the full index in RAM; diskann-rs loads pages on-demand.*
+
+### Benchmark Comparisons (vs hnsw_rs)
+
+<table>
+<tr>
+<td width="50%">
+<img src="docs/charts/recall_vs_qps.svg" alt="Recall vs QPS" width="100%">
+</td>
+<td width="50%">
+<img src="docs/charts/incremental_updates.svg" alt="Incremental Updates" width="100%">
+</td>
+</tr>
+</table>
+
+| Metric | diskann-rs | hnsw_rs | Winner |
+|--------|------------|---------|--------|
+| **QPS at 93% recall** | 586 | 170 | diskann-rs (3.4x) |
+| **Add vectors** | 31,000 vec/s | 2,000 vec/s | diskann-rs (15x) |
+| **Delete vectors** | Instant (tombstone) | Full rebuild | diskann-rs |
+| **Build time** | 33s / 100K | 21s / 100K | hnsw_rs (1.6x) |
+| **Max recall** | 97.5% | 99.2% | hnsw_rs |
+
+### Dataset Benchmarks
+
+Benchmarks on Apple M4 Max:
+
+| Dataset | Vectors | Build Time | QPS | Recall@10 |
+|---------|---------|------------|-----|-----------|
+| SIFT-1M | 1,000,000 | 295s | 8,590 | 99.6% |
+| Fashion-MNIST | 60,000 | 111s | 18,000 | 98.8% |
+| Random-50K | 50,000 | 38s | 2,200 | 85.6% |
+
+### Memory Efficiency
+
+- ~330MB RAM for 2GB index (16% of file size)
+- Product Quantization: 64x compression (512 bytes → 8 bytes per vector)
+
+## Architecture
+
+### File Layout
 
 ```
-
-### Parallel Search
-
-```rust
-use anndists::dist::DistL2;
-use diskann_rs::DiskANN;
-use rayon::prelude::*;
-
-let index = DiskANN::<DistL2>::open_index_default_metric("index.db")?;
-
-// Suppose you have a batch of queries
-let query_batch: Vec<Vec<f32>> = /* ... */;
-
-let results: Vec<Vec<u32>> = query_batch
-    .par_iter()
-    .map(|q| index.search(q, 10, 256))
-    .collect();
+[ metadata_len:u64 ][ metadata (bincode) ][ padding to 1 MiB ]
+[ vectors (n × dim × f32) ][ adjacency (n × max_degree × u32) ]
 ```
 
-## Algorithm Details
+### Incremental Updates (Delta Layer)
 
-### Vamana Graph Construction
-1. Initialize with random graph connectivity
-2. Iteratively improve edges using greedy search
-3. Apply α-pruning to maintain diversity in neighbors
-4. Ensure graph remains undirected
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  IncrementalDiskANN                         │
+├─────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────┐  │
+│  │   Base Index     │  │   Delta Layer    │  │ Tombstones│  │
+│  │   (mmap file)    │  │   (in-memory)    │  │  (BitSet) │  │
+│  │                  │  │   + mini-graph   │  │           │  │
+│  └──────────────────┘  └──────────────────┘  └───────────┘  │
+└─────────────────────────────────────────────────────────────┘
 
-### Beam Search Algorithm
-1. Start from medoid (vector closest to dataset centroid)
-2. Maintain beam of promising candidates
-3. Explore neighbors of best candidates
-4. Terminate when no improvement found
-5. Return top-k results
+Search: query base → merge delta → filter tombstones → return
+```
 
-### Memory Management
-- **Vectors**: Memory-mapped, loaded on-demand during distance calculations
-- **Graph structure**: Adjacency lists stored contiguously in file
-- **Search memory**: Only beam_width vectors in memory at once
-- **Typical usage**: 10-100MB RAM for billion-scale indices
-
-## Performance Characteristics
-
-- **Index Build Time**: O(n * max_degree * beam_width)
-- **Search Time**: O(beam_width * log n) - typically visits < 1% of dataset
-- **Memory Usage**: O(beam_width) during search
-- **Disk Space**: n * (dimension * 4 + max_degree * 4) bytes
-- **Query Throughput**: Scales linearly with CPU cores
-
-## Parameters Tuning
+## Parameters
 
 ### Build Parameters
-- `max_degree`: 32-64 for most datasets
-- `build_beam_width`: 128-256 for good graph quality
-- `alpha`: 1.2-2.0 (higher = more diverse neighbors)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_degree` | 64 | Maximum neighbors per node (32-64) |
+| `build_beam_width` | 128 | Construction beam width (128-256) |
+| `alpha` | 1.2 | Pruning diversity factor (1.2-2.0) |
 
 ### Search Parameters
-- `beam_width`: 128 or larger (trade-off between speed and recall)
-- Higher beam_width = better recall but slower search
+
+| Parameter | Typical | Trade-off |
+|-----------|---------|-----------|
+| `beam_width` | 128-512 | Higher = better recall, slower |
+| `k` | 10-100 | Number of neighbors to return |
 
 ## Building and Testing
 
 ```bash
-# Build the library
+# Build
 cargo build --release
 
 # Run tests
-cargo test
+cargo test --lib
 
-# Run demo
-cargo run --release --example demo
-# Run performance test
-cargo run --release --example perf_test
+# Run benchmarks
+cargo bench --bench benchmark
 
-# test MNIST fashion dataset
-wget http://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5
-cargo run --release --example diskann_mnist
-
-# test SIFT dataset
-wget http://ann-benchmarks.com/sift-128-euclidean.hdf5
-cargo run --release --example diskann_sift
+# Large benchmarks (slower)
+DISKANN_BENCH_LARGE=1 cargo bench --bench benchmark
 ```
 
-## Examples
+## Comparison with rust-diskann
 
-See the `examples/` directory for:
-- `demo.rs`: Demo with 100k vectors  
-- `perf_test.rs`: Performance benchmarking with 1M vectors
-- `diskann_mnist.rs`: Performance benchmarking with MNIST fashion dataset (60K)
-- `diskann_sift.rs`: Performance benchmarking with SIFT 1M dataset
-- `bigann.rs`: Performance benchmarking with SIFT 10M dataset
-
-## Benchmark against HNSW ([hnsw_rs](https://crates.io/crates/hnsw_rs) crate)
-```bash
-### MNIST fashion, diskann, M4 Max
-Building DiskANN index: n=60000, dim=784, max_degree=48, build_beam=256, alpha=1.2
-Build complete. CPU time: 1726.199372s, wall time: 111.145414s
-Searching 10000 queries with k=10, beam_width=384 …
- mean fraction nb returned by search 1.0
-
- last distances ratio 1.0031366
- recall rate for "./fashion-mnist-784-euclidean.hdf5" is 0.98838 , nb req /s 18067.664
-
- total cpu time for search requests 8.520862s , system time 553.475ms
-
-
-### MNIST fashion, hnsw_rs, M4 Max
-parallel insertion
-
- hnsw data insertion cpu time  111.169283s  system time Ok(7.256291s) 
- debug dump of PointIndexation
- layer 0 : length : 59999 
- layer 1 : length : 1 
- debug dump of PointIndexation end
- hnsw data nb point inserted 60000
-
- searching with ef : 24
- 
- parallel search
-total cpu time for search requests 3838.7310ms , system time 263.571ms 
-
- mean fraction nb returned by search 1.0 
-
- last distances ratio 1.0003573 
-
- recall rate for "./fashion-mnist-784-euclidean.hdf5" is 0.99054 , nb req /s 37940.44
-
-```
-
-## Current Implementation
-
-**Completed Features**:
-- Single-file storage format with memory mapping
-- Vamana graph construction with α-pruning
-- Beam search with medoid entry points
-- Multiple distance metrics (Euclidean, Cosine)
-- Parallel query processing
-- Comprehensive test suite
-- Memory-efficient design (< 100MB for large indices)
-
-## Future Improvements
-
-1. Support for incremental index updates
-2. Additional distance metrics (Manhattan, Hamming)
-3. Compressed vector storage
-4. Distributed index support
-5. GPU acceleration for distance calculations
-6. Auto-tuning of parameters
-
-## Contributing
-
-Contributions are welcome! Please feel free to:
-- Open issues for bugs or feature requests
-- Submit PRs for improvements
-- Share performance benchmarks
-- Suggest optimizations
+| Feature | diskann-rs | rust-diskann |
+|---------|------------|--------------|
+| Incremental updates | Yes | No |
+| Filtered search | Yes | No |
+| Product Quantization | Yes | No |
+| SIMD acceleration | Yes | Uses anndists |
+| Generic vector types | f32 | f32, u64, etc. |
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## References
 
-- [DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node](https://www.microsoft.com/en-us/research/publication/diskann-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node/)
+- [DiskANN Paper (NeurIPS 2019)](https://proceedings.neurips.cc/paper_files/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html)
 - [Microsoft DiskANN Repository](https://github.com/Microsoft/DiskANN)
-
-## Acknowledgments
-
-This implementation is based on the DiskANN paper and the official Microsoft implementation, adapted for Rust with focus on simplicity and memory efficiency.

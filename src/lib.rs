@@ -4,7 +4,8 @@
 //! - Builds a Vamana-style graph (greedy + α-pruning) in memory
 //! - Writes vectors + fixed-degree adjacency to a single file
 //! - Memory-maps the file for low-overhead reads
-//! - Is **generic over any Distance<f32>** from `anndists` (L2, Cosine, Hamming, Dot, …)
+//! - Is **generic over any `Distance<f32>`** from `anndists` (L2, Cosine, Hamming, Dot, …)
+//! - Supports **incremental updates** (add/delete vectors without full rebuild)
 //!
 //! ## Example
 //! ```no_run
@@ -31,11 +32,48 @@
 //! let _reopened = DiskANN::<DistL2>::open_index_default_metric("index.db").unwrap();
 //! ```
 //!
+//! ## Incremental Updates
+//! ```no_run
+//! use anndists::dist::DistL2;
+//! use diskann_rs::IncrementalDiskANN;
+//!
+//! // Build initial index
+//! let vectors = vec![vec![0.0; 128]; 1000];
+//! let mut index = IncrementalDiskANN::<DistL2>::build_default(&vectors, "index.db").unwrap();
+//!
+//! // Add vectors without rebuilding
+//! let new_ids = index.add_vectors(&[vec![1.0; 128]]).unwrap();
+//!
+//! // Delete vectors (lazy tombstoning)
+//! index.delete_vectors(&[0, 1, 2]).unwrap();
+//!
+//! // Compact when needed
+//! if index.should_compact() {
+//!     index.compact("index_v2.db").unwrap();
+//! }
+//! ```
+//!
 //! ## File Layout
 //! [ metadata_len:u64 ][ metadata (bincode) ][ padding up to vectors_offset ]
 //! [ vectors (num * dim * f32) ][ adjacency (num * max_degree * u32) ]
 //!
 //! `vectors_offset` is a fixed 1 MiB gap by default.
+
+mod incremental;
+mod filtered;
+pub mod simd;
+pub mod pq;
+
+pub use incremental::{
+    IncrementalDiskANN, IncrementalConfig, IncrementalStats,
+    is_delta_id, delta_local_idx,
+};
+
+pub use filtered::{FilteredDiskANN, Filter};
+
+pub use simd::{SimdL2, SimdDot, SimdCosine, simd_info};
+
+pub use pq::{ProductQuantizer, PQConfig, PQStats};
 
 use anndists::prelude::Distance;
 use bytemuck;
@@ -141,16 +179,16 @@ where
     pub distance_name: String,
 
     /// ID of the medoid (used as entry point)
-    medoid_id: u32,
+    pub(crate) medoid_id: u32,
     // Offsets
-    vectors_offset: u64,
-    adjacency_offset: u64,
+    pub(crate) vectors_offset: u64,
+    pub(crate) adjacency_offset: u64,
 
     /// Memory-mapped file
-    mmap: Mmap,
+    pub(crate) mmap: Mmap,
 
     /// The distance strategy
-    dist: D,
+    pub(crate) dist: D,
 }
 
 // constructors
@@ -219,7 +257,7 @@ where
     /// Builds a new index from provided vectors
     ///
     /// # Arguments
-    /// * `vectors` - The vectors to index (slice of Vec<f32>)
+    /// * `vectors` - The vectors to index (slice of `Vec<f32>`)
     /// * `max_degree` - Maximum edges per node (M ~ 24-64)
     /// * `build_beam_width` - Construction L (e.g., 128-400)
     /// * `alpha` - Pruning parameter (1.2–2.0)
