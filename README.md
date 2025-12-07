@@ -241,7 +241,9 @@ cargo bench --bench benchmark
 DISKANN_BENCH_LARGE=1 cargo bench --bench benchmark
 ```
 
-## Comparison with rust-diskann
+## Comparison with Other Libraries
+
+### vs rust-diskann
 
 | Feature | diskann-rs | rust-diskann |
 |---------|------------|--------------|
@@ -249,7 +251,34 @@ DISKANN_BENCH_LARGE=1 cargo bench --bench benchmark
 | Filtered search | Yes | No |
 | Product Quantization | Yes | No |
 | SIMD acceleration | Yes | Uses anndists |
+| Memory-mapped I/O | Yes | Yes |
 | Generic vector types | f32 | f32, u64, etc. |
+
+### vs hnsw_rs
+
+| Feature | diskann-rs | hnsw_rs |
+|---------|------------|---------|
+| Memory usage | 6-10x lower | Full index in RAM |
+| Incremental add | 15x faster | Slower |
+| Incremental delete | Instant (tombstone) | Full rebuild |
+| Build time | 1.6x slower | Faster |
+| Max recall | ~97% | ~99% |
+| Disk-based | Yes (mmap) | No (in-memory only) |
+
+### vs Faiss (C++/Python)
+
+| Feature | diskann-rs | Faiss |
+|---------|------------|-------|
+| Language | Pure Rust | C++/Python |
+| Deployment | Single binary | Complex deps |
+| Memory-mapped | Native | Limited |
+| GPU support | No | Yes |
+| Index types | Vamana graph | IVF, HNSW, PQ, etc. |
+| Maturity | Growing | Production-proven |
+
+**When to choose diskann-rs**: Pure Rust deployment, memory-constrained environments, need for incremental updates.
+
+**When to choose Faiss**: GPU acceleration needed, need specialized index types, Python ecosystem.
 
 ## License
 
